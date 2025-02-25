@@ -1,0 +1,10 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.9
+requests==2.31.0
+nibabel==5.1.0
+numpy>=1.24.0
+nnunet==1.7.1
+gradio==4.19.2
+plotly==5.18.0
+pillow>=10.0.0 
