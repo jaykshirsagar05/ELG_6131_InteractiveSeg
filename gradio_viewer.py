@@ -690,4 +690,8 @@ with gr.Blocks() as demo:
             )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(
+        server_name="0.0.0.0",  # Allow external connections
+        server_port=7860,       # Specify port explicitly
+        share=False            # Don't create a public URL
+    )
