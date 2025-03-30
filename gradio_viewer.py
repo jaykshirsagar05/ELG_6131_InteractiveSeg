@@ -229,7 +229,7 @@ def get_model_versions():
 def process_segmentation_with_version(ct_file, axial_idx, sagittal_idx, coronal_idx, alpha):
     """
     Process a CT scan for segmentation.
-    Returns the volumes and updated views.
+    Returns the volumes, updated views, CT file, segmentation file, and model version.
     """
     if ct_file is None:
         raise gr.Error("Please upload a CT scan first")
@@ -275,24 +275,21 @@ def process_segmentation_with_version(ct_file, axial_idx, sagittal_idx, coronal_
         )
         
         model_version = result.get("model_version", "unknown")
-        return (volumes,) + figs + (f"Current Model: {model_version}",)
+        return (volumes, *figs, ct_file, seg_file, f"Current Model: {model_version}")
         
     except Exception as e:
         raise gr.Error(f"Error during segmentation: {str(e)}")
-    finally:
-        # Clean up temporary directory after we're done with the volumes
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                print(f"Error cleaning up temporary directory: {str(e)}")
+    # Note: We don't clean up temp_dir here because we need the segmentation file to persist
 
 # --- Gradio Interface ---
 
 with gr.Blocks() as demo:
     gr.Markdown("# Interactive CT Scan Segmentation")
     
-    # State for tracking model version
+    # Shared states across all tabs
+    global_volumes_state = gr.State(None)
+    global_ct_file_state = gr.State(None)
+    global_seg_file_state = gr.State(None)
     current_model_version = gr.State("v1.0")
     
     with gr.Tabs():
@@ -317,10 +314,9 @@ with gr.Blocks() as demo:
                 sagittal_plot_seg = gr.Plot(label="Sagittal View")
                 coronal_plot_seg = gr.Plot(label="Coronal View")
             
-            volumes_state_seg = gr.State(None)
             model_version_info = gr.Markdown("Current Model: v1.0")
             
-            # Update the segmentation button click event
+            # Update the segmentation button click event to populate global states
             segment_btn.click(
                 fn=process_segmentation_with_version,
                 inputs=[
@@ -331,64 +327,89 @@ with gr.Blocks() as demo:
                     alpha_slider_seg
                 ],
                 outputs=[
-                    volumes_state_seg,
+                    global_volumes_state,
                     axial_plot_seg,
                     sagittal_plot_seg,
                     coronal_plot_seg,
+                    global_ct_file_state,
+                    global_seg_file_state,
                     model_version_info
                 ]
             )
-        
-        # Tab 2: View Ground Truth and Segmentation
-        with gr.TabItem("View Ground Truth and Segmentation"):
-            with gr.Row():
-                ct_input = gr.File(label="Upload Ground Truth CT (.nii or .nii.gz)")
-                seg_input = gr.File(label="Upload Segmentation Mask (.nii or .nii.gz)")
-            with gr.Row():
-                axial_slider = gr.Slider(0, 100, step=1, label="Axial Slice", value=50)
-                sagittal_slider = gr.Slider(0, 100, step=1, label="Sagittal Slice", value=50)
-                coronal_slider = gr.Slider(0, 100, step=1, label="Coronal Slice", value=50)
-            with gr.Row():
-                alpha_slider = gr.Slider(0, 1, step=0.05, label="Overlay Alpha", value=0.5)
-            with gr.Row():
-                axial_plot = gr.Plot(label="Axial View")
-                sagittal_plot = gr.Plot(label="Sagittal View")
-                coronal_plot = gr.Plot(label="Coronal View")
-            volumes_state = gr.State(None)
-            ct_input.change(
-                fn=set_volumes,
-                inputs=[ct_input, seg_input, axial_slider, sagittal_slider, coronal_slider, alpha_slider],
-                outputs=[volumes_state, axial_plot, sagittal_plot, coronal_plot]
-            )
-            seg_input.change(
-                fn=set_volumes,
-                inputs=[ct_input, seg_input, axial_slider, sagittal_slider, coronal_slider, alpha_slider],
-                outputs=[volumes_state, axial_plot, sagittal_plot, coronal_plot]
-            )
             
-            def update_sliders_viewer(axial_idx, sagittal_idx, coronal_idx, alpha, volumes):
+            # Update sliders dynamically based on volumes
+            def update_sliders_seg(axial_idx, sagittal_idx, coronal_idx, alpha, volumes):
                 if volumes is None:
                     return None, None, None
                 return update_views(axial_idx, sagittal_idx, coronal_idx, alpha, volumes)
                 
-            for slider in [axial_slider, sagittal_slider, coronal_slider, alpha_slider]:
+            for slider in [axial_slider_seg, sagittal_slider_seg, coronal_slider_seg, alpha_slider_seg]:
                 slider.change(
-                    fn=update_sliders_viewer,
-                    inputs=[axial_slider, sagittal_slider, coronal_slider, alpha_slider, volumes_state],
-                    outputs=[axial_plot, sagittal_plot, coronal_plot]
+                    fn=update_sliders_seg,
+                    inputs=[axial_slider_seg, sagittal_slider_seg, coronal_slider_seg, alpha_slider_seg, global_volumes_state],
+                    outputs=[axial_plot_seg, sagittal_plot_seg, coronal_plot_seg]
                 )
+        
+        # # Tab 2: View Ground Truth and Segmentation
+        # with gr.TabItem("View Ground Truth and Segmentation"):
+        #     with gr.Row():
+        #         gr.Markdown("Using CT and Segmentation from 'Perform Segmentation' tab. Upload here only if you want to override.")
+        #         ct_input = gr.File(label="Upload Ground Truth CT (.nii or .nii.gz)")
+        #         seg_input = gr.File(label="Upload Segmentation Mask (.nii or .nii.gz)")
+        #     with gr.Row():
+        #         axial_slider = gr.Slider(0, 100, step=1, label="Axial Slice", value=50)
+        #         sagittal_slider = gr.Slider(0, 100, step=1, label="Sagittal Slice", value=50)
+        #         coronal_slider = gr.Slider(0, 100, step=1, label="Coronal Slice", value=50)
+        #     with gr.Row():
+        #         alpha_slider = gr.Slider(0, 1, step=0.05, label="Overlay Alpha", value=0.5)
+        #     with gr.Row():
+        #         axial_plot = gr.Plot(label="Axial View")
+        #         sagittal_plot = gr.Plot(label="Sagittal View")
+        #         coronal_plot = gr.Plot(label="Coronal View")
+            
+        #     # Function to use global states or override with new uploads
+        #     def update_views_with_global_or_new(ct_file, seg_file, axial_idx, sagittal_idx, coronal_idx, alpha, global_ct, global_seg, global_volumes):
+        #         if ct_file and seg_file:
+        #             volumes = load_volumes(ct_file, seg_file)
+        #             figs = update_views(axial_idx, sagittal_idx, coronal_idx, alpha, volumes)
+        #             return volumes, *figs
+        #         elif global_volumes is not None:
+        #             figs = update_views(axial_idx, sagittal_idx, coronal_idx, alpha, global_volumes)
+        #             return global_volumes, *figs
+        #         return None, None, None, None
+            
+        #     ct_input.change(
+        #         fn=update_views_with_global_or_new,
+        #         inputs=[ct_input, seg_input, axial_slider, sagittal_slider, coronal_slider, alpha_slider, global_ct_file_state, global_seg_file_state, global_volumes_state],
+        #         outputs=[global_volumes_state, axial_plot, sagittal_plot, coronal_plot]
+        #     )
+        #     seg_input.change(
+        #         fn=update_views_with_global_or_new,
+        #         inputs=[ct_input, seg_input, axial_slider, sagittal_slider, coronal_slider, alpha_slider, global_ct_file_state, global_seg_file_state, global_volumes_state],
+        #         outputs=[global_volumes_state, axial_plot, sagittal_plot, coronal_plot]
+        #     )
+            
+        #     def update_sliders_viewer(axial_idx, sagittal_idx, coronal_idx, alpha, volumes):
+        #         if volumes is None:
+        #             return None, None, None
+        #         return update_views(axial_idx, sagittal_idx, coronal_idx, alpha, volumes)
+                
+        #     for slider in [axial_slider, sagittal_slider, coronal_slider, alpha_slider]:
+        #         slider.change(
+        #             fn=update_sliders_viewer,
+        #             inputs=[axial_slider, sagittal_slider, coronal_slider, alpha_slider, global_volumes_state],
+        #             outputs=[axial_plot, sagittal_plot, coronal_plot]
+        #         )
         
         # Tab 3: Edit Segmentation and Submit Feedback
         with gr.TabItem("Edit & Submit Feedback"):
             gr.Markdown("### Edit the Segmentation Mask and Submit Feedback to Improve the Model")
+            gr.Markdown("Using CT and Segmentation from 'Perform Segmentation' tab by default.")
             
             # Hidden states for editing
-            edit_volumes_state = gr.State(None)
             edited_slices_state = gr.State({})
-            ct_path_state = gr.State(None)
-            original_seg_path_state = gr.State(None)
             
-            # Two-column layout: left column for the editing window; right column for controls.
+            # Two-column layout
             with gr.Row():
                 with gr.Column(scale=1):
                     edit_image_editor = gr.ImageEditor(
@@ -400,7 +421,7 @@ with gr.Blocks() as demo:
                     )
                 with gr.Column(scale=1):
                     with gr.Group():
-                        gr.Markdown("#### 1. Load Data")
+                        gr.Markdown("#### 1. Load Data (Optional Override)")
                         edit_ct_input = gr.File(label="Upload CT Scan (.nii or .nii.gz)", file_count="single")
                         edit_seg_input = gr.File(label="Upload Segmentation Mask (.nii or .nii.gz)", file_count="single")
                         load_volumes_btn = gr.Button("Load Volumes for Editing")
@@ -426,29 +447,34 @@ with gr.Blocks() as demo:
                         refresh_model_info_btn = gr.Button("Refresh Model Information")
                         model_info_display = gr.JSON(label="Model Version Information")
             
-            # Load volumes event
-            def load_volumes_and_store_paths(ct, seg):
-                """Load volumes and store the file paths for later use."""
-                volumes = load_volumes(ct, seg)
-                return volumes, ct.name, seg.name
+            # Load volumes event, using global states if no override
+            def load_volumes_and_store_paths(ct, seg, global_ct, global_seg):
+                """Load volumes and store the file paths for later use, defaulting to global states."""
+                if ct and seg:
+                    volumes = load_volumes(ct, seg)
+                    return volumes, ct.name, seg.name
+                elif global_ct and global_seg:
+                    volumes = load_volumes(global_ct, global_seg)
+                    return volumes, global_ct.name, global_seg.name
+                return None, None, None
             
             load_volumes_btn.click(
                 fn=load_volumes_and_store_paths,
-                inputs=[edit_ct_input, edit_seg_input],
-                outputs=[edit_volumes_state, ct_path_state, original_seg_path_state]
+                inputs=[edit_ct_input, edit_seg_input, global_ct_file_state, global_seg_file_state],
+                outputs=[global_volumes_state, global_ct_file_state, global_seg_file_state]
             )
             
             # View selector event
             view_selector.change(
                 fn=update_slice_slider,
-                inputs=[edit_volumes_state, view_selector],
+                inputs=[global_volumes_state, view_selector],
                 outputs=slice_slider
             )
             
             # Load slice event
             load_slice_btn.click(
                 fn=load_edit_slice_from_volumes,
-                inputs=[edit_volumes_state, view_selector, slice_slider],
+                inputs=[global_volumes_state, view_selector, slice_slider],
                 outputs=edit_image_editor
             )
             
@@ -462,7 +488,7 @@ with gr.Blocks() as demo:
             # Finalize mask event
             finalize_btn.click(
                 fn=finalize_edited_mask,
-                inputs=[edited_slices_state, edit_seg_input, view_selector, edit_volumes_state],
+                inputs=[edited_slices_state, global_seg_file_state, view_selector, global_volumes_state],
                 outputs=final_status
             )
             
@@ -472,12 +498,12 @@ with gr.Blocks() as demo:
                 if "edited_segmentation.nii.gz" not in final_status:
                     return "Please finalize the edited mask first."
                 
-                edited_seg_path = "edited_segmentation.nii.gz"  # This should match the path in finalize_edited_mask
+                edited_seg_path = "edited_segmentation.nii.gz"
                 return submit_feedback_to_backend(ct_path, original_seg_path, edited_seg_path, notes)
             
             submit_feedback_btn.click(
                 fn=submit_feedback_wrapper,
-                inputs=[ct_path_state, original_seg_path_state, final_status, feedback_notes],
+                inputs=[global_ct_file_state, global_seg_file_state, final_status, feedback_notes],
                 outputs=feedback_status
             )
             
@@ -537,7 +563,6 @@ with gr.Blocks() as demo:
                     if response.status_code == 200:
                         versions = response.json()
                         
-                        # Extract stats for the DataFrame
                         stats_data = []
                         for version in versions.get("versions", []):
                             stats_data.append([
@@ -564,7 +589,7 @@ with gr.Blocks() as demo:
 
 if __name__ == "__main__":
     demo.launch(
-        server_name="0.0.0.0",  # Allow external connections
-        server_port=7860,       # Specify port explicitly
-        share=False            # Don't create a public URL
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False
     )
