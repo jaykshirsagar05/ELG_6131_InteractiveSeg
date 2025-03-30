@@ -1,0 +1,12 @@
+{
+  "current_version": "v1.0",
+  "versions": [
+    {
+      "version": "v1.0",
+      "date_created": "2025-03-30T10:35:03.756090",
+      "training_samples": 0,
+      "feedback_samples": 0,
+      "performance_metrics": {}
+    }
+  ]
+}

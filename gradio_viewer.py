@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import json
 import tempfile
-from uncertainty import get_uncertainty_overlay
 import shutil
 
 # Backend API URL
@@ -226,112 +225,20 @@ def get_model_versions():
             return {"error": f"Failed to get model versions: {response.text}"}
     except Exception as e:
         return {"error": f"Error connecting to backend: {str(e)}"}
-
-def load_volumes_with_uncertainty(ct_file, seg_file, uncertainty_file=None):
-    """Load the CT, segmentation, and uncertainty volumes from NIfTI files."""
-    ct_data = nib.load(ct_file.name).get_fdata()
-    seg_data = nib.load(seg_file.name).get_fdata()
-    if uncertainty_file:
-        uncertainty_data = nib.load(uncertainty_file.name).get_fdata()
-    else:
-        uncertainty_data = None
-    return ct_data, seg_data, uncertainty_data
-
-def get_overlay_slice_image_with_uncertainty(ct_data, seg_data, uncertainty_data, view, index, alpha=0.5, uncertainty_threshold=0.5):
+    
+def process_segmentation_with_version(ct_file, axial_idx, sagittal_idx, coronal_idx, alpha):
     """
-    Extract and combine CT slice, segmentation, and uncertainty visualization.
-    """
-    ct_slice = extract_slice(ct_data, view, index)
-    seg_slice = extract_slice(seg_data, view, index)
-    
-    # Process CT and segmentation as before
-    ct_processed = normalize_ct(ct_slice)
-    seg_processed = colorize_segmentation(seg_slice)
-    
-    # Create base overlay
-    ct_img = Image.fromarray(ct_processed, mode="L").convert("RGBA")
-    seg_img = Image.fromarray(seg_processed, mode="RGBA")
-    
-    # If we have uncertainty data, add it to the visualization
-    if uncertainty_data is not None:
-        uncertainty_slice = extract_slice(uncertainty_data, view, index)
-        
-        # Create uncertainty overlay
-        uncertainty_overlay = get_uncertainty_overlay(
-            ct_slice,
-            uncertainty_slice,
-            threshold=uncertainty_threshold,
-            alpha=alpha * 0.5  # Use lower alpha for uncertainty
-        )
-        uncertainty_img = Image.fromarray(uncertainty_overlay).convert("RGBA")
-        
-        # Composite all layers: CT -> Segmentation -> Uncertainty
-        overlay = Image.alpha_composite(ct_img, seg_img)
-        overlay = Image.alpha_composite(overlay, uncertainty_img)
-    else:
-        # Without uncertainty, just composite CT and segmentation
-        overlay = Image.alpha_composite(ct_img, seg_img)
-    
-    return overlay
-
-def update_views_with_uncertainty(axial_idx, sagittal_idx, coronal_idx, alpha, volumes, uncertainty_threshold=0.5):
-    """
-    Update all views including uncertainty visualization.
-    """
-    ct_data, seg_data, uncertainty_data = volumes
-    dims = ct_data.shape
-    
-    axial_idx = int(np.clip(axial_idx, 0, dims[2]-1))
-    sagittal_idx = int(np.clip(sagittal_idx, 0, dims[0]-1))
-    coronal_idx = int(np.clip(coronal_idx, 0, dims[1]-1))
-    
-    # Create overlays with uncertainty
-    axial_overlay = get_overlay_slice_image_with_uncertainty(
-        ct_data, seg_data, uncertainty_data, 'axial', axial_idx, alpha, uncertainty_threshold
-    )
-    sagittal_overlay = get_overlay_slice_image_with_uncertainty(
-        ct_data, seg_data, uncertainty_data, 'sagittal', sagittal_idx, alpha, uncertainty_threshold
-    )
-    coronal_overlay = get_overlay_slice_image_with_uncertainty(
-        ct_data, seg_data, uncertainty_data, 'coronal', coronal_idx, alpha, uncertainty_threshold
-    )
-    
-    # Create Plotly figures
-    fig_axial = px.imshow(np.array(axial_overlay))
-    fig_axial.update_layout(
-        title=f"Axial Slice {axial_idx} (Red overlay indicates uncertainty)",
-        dragmode="zoom",
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
-    
-    fig_sagittal = px.imshow(np.array(sagittal_overlay))
-    fig_sagittal.update_layout(
-        title=f"Sagittal Slice {sagittal_idx} (Red overlay indicates uncertainty)",
-        dragmode="zoom",
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
-    
-    fig_coronal = px.imshow(np.array(coronal_overlay))
-    fig_coronal.update_layout(
-        title=f"Coronal Slice {coronal_idx} (Red overlay indicates uncertainty)",
-        dragmode="zoom",
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
-    
-    return fig_axial, fig_sagittal, fig_coronal
-
-def process_segmentation_with_version(ct_file, axial_idx, sagittal_idx, coronal_idx, alpha, uncertainty_threshold):
-    """
-    Process a CT scan for segmentation, including uncertainty estimation.
-    Returns the volumes and updated views with uncertainty visualization.
+    Process a CT scan for segmentation.
+    Returns the volumes and updated views.
     """
     if ct_file is None:
         raise gr.Error("Please upload a CT scan first")
     
-    # Perform segmentation with uncertainty estimation
+    temp_dir = None
     try:
+        # Send CT file to backend for segmentation
         with open(ct_file.name, "rb") as f:
-            files = {"file": (ct_file.name, f, "application/octet-stream")}
+            files = {"file": (os.path.basename(ct_file.name), f, "application/octet-stream")}
             response = requests.post(f"{BACKEND_URL}/upload-ct/", files=files)
         
         if response.status_code != 200:
@@ -341,33 +248,30 @@ def process_segmentation_with_version(ct_file, axial_idx, sagittal_idx, coronal_
         if "error" in result:
             raise gr.Error(f"Backend error: {result['error']}")
             
-        # Create temporary file objects for the paths
-        seg_file = tempfile.NamedTemporaryFile(delete=False, suffix=".nii.gz")
-        uncertainty_file = tempfile.NamedTemporaryFile(delete=False, suffix=".nii.gz")
+        # Create temporary file object for segmentation
+        temp_dir = tempfile.mkdtemp()
+        seg_file_path = os.path.join(temp_dir, "segmentation.nii")
         
-        # Copy the files from the backend paths to temporary files
-        shutil.copy2(result["segmentation_path"], seg_file.name)
-        shutil.copy2(result["uncertainty_path"], uncertainty_file.name)
+        # Copy the segmentation file directly from the backend path
+        shutil.copy2(result["segmentation_path"], seg_file_path)
         
-        # Create file-like objects that Gradio can handle
-        seg_file = gr.File.create_from(seg_file.name)
-        uncertainty_file = gr.File.create_from(uncertainty_file.name)
+        # Create a file object that Gradio can handle
+        class TempFile:
+            def __init__(self, path):
+                self.name = path
         
-        # Load volumes with uncertainty
-        volumes = load_volumes_with_uncertainty(
-            ct_file,
-            seg_file,
-            uncertainty_file
-        )
+        seg_file = TempFile(seg_file_path)
         
-        # Update views with uncertainty visualization
-        figs = update_views_with_uncertainty(
+        # Load volumes
+        volumes = load_volumes(ct_file, seg_file)
+        
+        # Update views
+        figs = update_views(
             axial_idx,
             sagittal_idx,
             coronal_idx,
             alpha,
-            volumes,
-            uncertainty_threshold
+            volumes
         )
         
         model_version = result.get("model_version", "unknown")
@@ -376,35 +280,29 @@ def process_segmentation_with_version(ct_file, axial_idx, sagittal_idx, coronal_
     except Exception as e:
         raise gr.Error(f"Error during segmentation: {str(e)}")
     finally:
-        # Clean up temporary files
-        try:
-            if 'seg_file' in locals():
-                os.unlink(seg_file.name)
-            if 'uncertainty_file' in locals():
-                os.unlink(uncertainty_file.name)
-        except:
-            pass
+        # Clean up temporary directory after we're done with the volumes
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"Error cleaning up temporary directory: {str(e)}")
 
 # --- Gradio Interface ---
 
 with gr.Blocks() as demo:
-    gr.Markdown("# Interactive CT Scan Segmentation with Uncertainty Visualization")
+    gr.Markdown("# Interactive CT Scan Segmentation")
     
     # State for tracking model version
     current_model_version = gr.State("v1.0")
     
     with gr.Tabs():
-        # Tab 1: Perform Segmentation with Uncertainty
+        # Tab 1: Perform Segmentation
         with gr.TabItem("Perform Segmentation"):
             with gr.Row():
                 ct_input_seg = gr.File(label="Upload CT Scan (.nii or .nii.gz)")
             
             with gr.Row():
                 segment_btn = gr.Button("Perform Segmentation")
-                uncertainty_threshold = gr.Slider(
-                    0, 1, value=0.5, step=0.05,
-                    label="Uncertainty Threshold (higher = show more uncertain regions)"
-                )
             
             with gr.Row():
                 axial_slider_seg = gr.Slider(0, 100, step=1, label="Axial Slice", value=50)
@@ -430,8 +328,7 @@ with gr.Blocks() as demo:
                     axial_slider_seg,
                     sagittal_slider_seg,
                     coronal_slider_seg,
-                    alpha_slider_seg,
-                    uncertainty_threshold
+                    alpha_slider_seg
                 ],
                 outputs=[
                     volumes_state_seg,
@@ -441,30 +338,6 @@ with gr.Blocks() as demo:
                     model_version_info
                 ]
             )
-            
-            # Update slider events to include uncertainty visualization
-            def update_views_with_uncertainty_wrapper(
-                axial_idx, sagittal_idx, coronal_idx, alpha, volumes, uncertainty_threshold
-            ):
-                if volumes is None:
-                    return None, None, None
-                return update_views_with_uncertainty(
-                    axial_idx, sagittal_idx, coronal_idx, alpha, volumes, uncertainty_threshold
-                )
-            
-            for slider in [axial_slider_seg, sagittal_slider_seg, coronal_slider_seg, alpha_slider_seg, uncertainty_threshold]:
-                slider.change(
-                    fn=update_views_with_uncertainty_wrapper,
-                    inputs=[
-                        axial_slider_seg,
-                        sagittal_slider_seg,
-                        coronal_slider_seg,
-                        alpha_slider_seg,
-                        volumes_state_seg,
-                        uncertainty_threshold
-                    ],
-                    outputs=[axial_plot_seg, sagittal_plot_seg, coronal_plot_seg]
-                )
         
         # Tab 2: View Ground Truth and Segmentation
         with gr.TabItem("View Ground Truth and Segmentation"):
