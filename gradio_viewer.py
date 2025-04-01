@@ -149,36 +149,58 @@ def finalize_edited_mask(edited_slices, seg_file, view, volumes):
     If an edited slice exists in edited_slices for a given slice index, use it; otherwise use the original segmentation slice.
     Reconstruct the full 3D segmentation mask and save it as a NIfTI file.
     """
-    ct_data, seg_data = volumes
-    dims = seg_data.shape
-    if view == "axial":
-        max_index = dims[2]
-    elif view == "sagittal":
-        max_index = dims[0]
-    elif view == "coronal":
-        max_index = dims[1]
-    else:
-        raise ValueError("Invalid view")
-    final_slices = []
-    for i in range(max_index):
-        key = (view, i)
-        if key in edited_slices:
-            slice_img = np.array(edited_slices[key])
-            final_slices.append(slice_img)
+    if not edited_slices:
+        return "No edits to finalize. Please edit some slices first."
+    
+    try:
+        ct_data, seg_data = volumes
+        dims = seg_data.shape
+        if view == "axial":
+            max_index = dims[2]
+        elif view == "sagittal":
+            max_index = dims[0]
+        elif view == "coronal":
+            max_index = dims[1]
         else:
-            slice_data = extract_slice(seg_data, view, i)
-            final_slices.append(slice_data)
-    if view == "axial":
-        final_volume = np.stack(final_slices, axis=2)
-    elif view == "sagittal":
-        final_volume = np.stack(final_slices, axis=0)
-    elif view == "coronal":
-        final_volume = np.stack(final_slices, axis=1)
-    affine = nib.load(seg_file.name).affine
-    final_nifti = nib.Nifti1Image(final_volume, affine)
-    out_path = Path("edited_segmentation.nii.gz")
-    nib.save(final_nifti, str(out_path))
-    return str(out_path)
+            raise ValueError("Invalid view")
+            
+        final_slices = []
+        for i in range(max_index):
+            key = (view, i)
+            if key in edited_slices:
+                slice_img = np.array(edited_slices[key])
+                # Convert RGB to single channel if necessary
+                if len(slice_img.shape) > 2:
+                    slice_img = slice_img[:, :, 0]  # Take first channel
+                final_slices.append(slice_img)
+            else:
+                slice_data = extract_slice(seg_data, view, i)
+                final_slices.append(slice_data)
+                
+        if view == "axial":
+            final_volume = np.stack(final_slices, axis=2)
+        elif view == "sagittal":
+            final_volume = np.stack(final_slices, axis=0)
+        elif view == "coronal":
+            final_volume = np.stack(final_slices, axis=1)
+            
+        # Load original segmentation to get affine matrix
+        if hasattr(seg_file, 'name'):
+            original_seg = nib.load(seg_file.name)
+        else:
+            original_seg = nib.load(str(seg_file))
+            
+        affine = original_seg.affine
+        final_nifti = nib.Nifti1Image(final_volume, affine)
+        
+        # Save to current directory
+        out_path = Path("edited_segmentation.nii.gz")
+        nib.save(final_nifti, str(out_path))
+        
+        return f"Successfully saved edited mask to {str(out_path)}"
+        
+    except Exception as e:
+        return f"Error finalizing mask: {str(e)}"
 
 def update_slice_slider(volumes, view):
     if volumes is None:
@@ -350,58 +372,7 @@ with gr.Blocks() as demo:
                     outputs=[axial_plot_seg, sagittal_plot_seg, coronal_plot_seg]
                 )
         
-        # # Tab 2: View Ground Truth and Segmentation
-        # with gr.TabItem("View Ground Truth and Segmentation"):
-        #     with gr.Row():
-        #         gr.Markdown("Using CT and Segmentation from 'Perform Segmentation' tab. Upload here only if you want to override.")
-        #         ct_input = gr.File(label="Upload Ground Truth CT (.nii or .nii.gz)")
-        #         seg_input = gr.File(label="Upload Segmentation Mask (.nii or .nii.gz)")
-        #     with gr.Row():
-        #         axial_slider = gr.Slider(0, 100, step=1, label="Axial Slice", value=50)
-        #         sagittal_slider = gr.Slider(0, 100, step=1, label="Sagittal Slice", value=50)
-        #         coronal_slider = gr.Slider(0, 100, step=1, label="Coronal Slice", value=50)
-        #     with gr.Row():
-        #         alpha_slider = gr.Slider(0, 1, step=0.05, label="Overlay Alpha", value=0.5)
-        #     with gr.Row():
-        #         axial_plot = gr.Plot(label="Axial View")
-        #         sagittal_plot = gr.Plot(label="Sagittal View")
-        #         coronal_plot = gr.Plot(label="Coronal View")
-            
-        #     # Function to use global states or override with new uploads
-        #     def update_views_with_global_or_new(ct_file, seg_file, axial_idx, sagittal_idx, coronal_idx, alpha, global_ct, global_seg, global_volumes):
-        #         if ct_file and seg_file:
-        #             volumes = load_volumes(ct_file, seg_file)
-        #             figs = update_views(axial_idx, sagittal_idx, coronal_idx, alpha, volumes)
-        #             return volumes, *figs
-        #         elif global_volumes is not None:
-        #             figs = update_views(axial_idx, sagittal_idx, coronal_idx, alpha, global_volumes)
-        #             return global_volumes, *figs
-        #         return None, None, None, None
-            
-        #     ct_input.change(
-        #         fn=update_views_with_global_or_new,
-        #         inputs=[ct_input, seg_input, axial_slider, sagittal_slider, coronal_slider, alpha_slider, global_ct_file_state, global_seg_file_state, global_volumes_state],
-        #         outputs=[global_volumes_state, axial_plot, sagittal_plot, coronal_plot]
-        #     )
-        #     seg_input.change(
-        #         fn=update_views_with_global_or_new,
-        #         inputs=[ct_input, seg_input, axial_slider, sagittal_slider, coronal_slider, alpha_slider, global_ct_file_state, global_seg_file_state, global_volumes_state],
-        #         outputs=[global_volumes_state, axial_plot, sagittal_plot, coronal_plot]
-        #     )
-            
-        #     def update_sliders_viewer(axial_idx, sagittal_idx, coronal_idx, alpha, volumes):
-        #         if volumes is None:
-        #             return None, None, None
-        #         return update_views(axial_idx, sagittal_idx, coronal_idx, alpha, volumes)
-                
-        #     for slider in [axial_slider, sagittal_slider, coronal_slider, alpha_slider]:
-        #         slider.change(
-        #             fn=update_sliders_viewer,
-        #             inputs=[axial_slider, sagittal_slider, coronal_slider, alpha_slider, global_volumes_state],
-        #             outputs=[axial_plot, sagittal_plot, coronal_plot]
-        #         )
-        
-        # Tab 3: Edit Segmentation and Submit Feedback
+        # Tab 2: Edit Segmentation and Submit Feedback
         with gr.TabItem("Edit & Submit Feedback"):
             gr.Markdown("### Edit the Segmentation Mask and Submit Feedback to Improve the Model")
             gr.Markdown("Using CT and Segmentation from 'Perform Segmentation' tab by default.")
@@ -441,11 +412,6 @@ with gr.Blocks() as demo:
                         feedback_notes = gr.Textbox(label="Feedback Notes (optional)", placeholder="Describe what you changed and why...")
                         submit_feedback_btn = gr.Button("Submit Feedback to Improve Model", variant="primary")
                         feedback_status = gr.Textbox(label="Feedback Submission Status", interactive=False)
-                    
-                    with gr.Group():
-                        gr.Markdown("#### Model Information")
-                        refresh_model_info_btn = gr.Button("Refresh Model Information")
-                        model_info_display = gr.JSON(label="Model Version Information")
             
             # Load volumes event, using global states if no override
             def load_volumes_and_store_paths(ct, seg, global_ct, global_seg):
@@ -488,7 +454,12 @@ with gr.Blocks() as demo:
             # Finalize mask event
             finalize_btn.click(
                 fn=finalize_edited_mask,
-                inputs=[edited_slices_state, global_seg_file_state, view_selector, global_volumes_state],
+                inputs=[
+                    edited_slices_state,
+                    global_seg_file_state,
+                    view_selector,
+                    global_volumes_state
+                ],
                 outputs=final_status
             )
             
@@ -505,13 +476,6 @@ with gr.Blocks() as demo:
                 fn=submit_feedback_wrapper,
                 inputs=[global_ct_file_state, global_seg_file_state, final_status, feedback_notes],
                 outputs=feedback_status
-            )
-            
-            # Refresh model info event
-            refresh_model_info_btn.click(
-                fn=get_model_versions,
-                inputs=[],
-                outputs=model_info_display
             )
         
         # Tab 4: Model Training Dashboard (Admin)

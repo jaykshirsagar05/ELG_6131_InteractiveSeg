@@ -1,12 +1,19 @@
 {
-  "current_version": "v1.0",
+  "current_version": "v1.1",
   "versions": [
     {
       "version": "v1.0",
       "date_created": "2025-03-30T10:35:03.756090",
       "training_samples": 0,
-      "feedback_samples": 0,
+      "feedback_samples": 1,
       "performance_metrics": {}
+    },
+    {
+      "version": "v1.1",
+      "date_created": "2025-04-01T13:50:27.842350",
+      "feedback_samples": 0,
+      "based_on_version": "v1.0",
+      "feedback_used": 1
     }
   ]
 }
